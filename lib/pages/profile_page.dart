@@ -760,19 +760,22 @@ class _ProfilePageState extends State<ProfilePage> {
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(24),
               ),
-              title: const Row(
+              title: Row(
                 children: [
-                  Icon(
+                  const Icon(
                     Icons.contact_phone_outlined,
                     color: Color(0xFFE57373),
                     size: 26,
                   ),
-                  SizedBox(width: 8),
-                  Text(
-                    'Emergency Contacts',
-                    style: TextStyle(
-                      color: Color(0xFF0F2B48),
-                      fontWeight: FontWeight.bold,
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Emergency Contacts',
+                      style: const TextStyle(
+                        color: Color(0xFF0F2B48),
+                        fontWeight: FontWeight.bold,
+                      ),
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
                 ],
@@ -842,6 +845,8 @@ class _ProfilePageState extends State<ProfilePage> {
                                     children: [
                                       Text(
                                         name,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
                                         style: const TextStyle(
                                           fontWeight: FontWeight.bold,
                                           color: Color(0xFF0F2B48),
@@ -851,6 +856,8 @@ class _ProfilePageState extends State<ProfilePage> {
                                       const SizedBox(height: 2),
                                       Text(
                                         relation,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
                                         style: const TextStyle(
                                           color: Color(0xFF8A9AAD),
                                           fontSize: 12,
@@ -860,6 +867,8 @@ class _ProfilePageState extends State<ProfilePage> {
                                       const SizedBox(height: 2),
                                       Text(
                                         phone,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
                                         style: const TextStyle(
                                           color: Color(0xFF2B72D0),
                                           fontSize: 12,
@@ -870,7 +879,9 @@ class _ProfilePageState extends State<ProfilePage> {
                                   ),
                                 ),
                                 IconButton(
-                                  icon: const Icon(Icons.call_rounded, color: Color(0xFF3EC8A8)),
+                                  icon: const Icon(Icons.call_rounded, color: Color(0xFF3EC8A8), size: 22),
+                                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                                  padding: EdgeInsets.zero,
                                   onPressed: () async {
                                     final Uri launchUri = Uri(
                                       scheme: 'tel',
@@ -901,8 +912,11 @@ class _ProfilePageState extends State<ProfilePage> {
                                     }
                                   },
                                 ),
+                                const SizedBox(width: 8),
                                 IconButton(
-                                  icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFE57373)),
+                                  icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFE57373), size: 22),
+                                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                                  padding: EdgeInsets.zero,
                                   onPressed: () async {
                                     try {
                                       await SupabaseService.deleteEmergencyContact(id);
@@ -931,12 +945,12 @@ class _ProfilePageState extends State<ProfilePage> {
                     const SizedBox(height: 16),
                     SizedBox(
                       width: double.infinity,
-                      height: 48,
                       child: ElevatedButton.icon(
                         onPressed: () => _showAddContactDialog(context, setDialogState),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFFE57373),
                           foregroundColor: Colors.white,
+                          minimumSize: const Size.fromHeight(48),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
                           ),
@@ -945,6 +959,8 @@ class _ProfilePageState extends State<ProfilePage> {
                         icon: const Icon(Icons.add_rounded, size: 20),
                         label: const Text(
                           'Add Emergency Contact',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(fontWeight: FontWeight.bold),
                         ),
                       ),
@@ -994,54 +1010,56 @@ class _ProfilePageState extends State<ProfilePage> {
                   fontWeight: FontWeight.bold,
                 ),
               ),
-              content: Form(
-                key: formKey,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    TextFormField(
-                      controller: nameController,
-                      decoration: const InputDecoration(
-                        labelText: 'Contact Name / Doctor',
-                        hintText: 'e.g. Dr. Sarah Miller',
+              content: SingleChildScrollView(
+                child: Form(
+                  key: formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextFormField(
+                        controller: nameController,
+                        decoration: const InputDecoration(
+                          labelText: 'Contact Name / Doctor',
+                          hintText: 'e.g. Dr. Sarah Miller',
+                        ),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Please enter a name';
+                          }
+                          return null;
+                        },
                       ),
-                      validator: (value) {
-                        if (value == null || value.trim().isEmpty) {
-                          return 'Please enter a name';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: relationController,
-                      decoration: const InputDecoration(
-                        labelText: 'Relation / Specialty',
-                        hintText: 'e.g. Primary Physician, Son',
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: relationController,
+                        decoration: const InputDecoration(
+                          labelText: 'Relation / Specialty',
+                          hintText: 'e.g. Primary Physician, Son',
+                        ),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Please enter relation/specialty';
+                          }
+                          return null;
+                        },
                       ),
-                      validator: (value) {
-                        if (value == null || value.trim().isEmpty) {
-                          return 'Please enter relation/specialty';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: phoneController,
-                      keyboardType: TextInputType.phone,
-                      decoration: const InputDecoration(
-                        labelText: 'Phone Number',
-                        hintText: 'e.g. +1 (555) 987-6543',
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: phoneController,
+                        keyboardType: TextInputType.phone,
+                        decoration: const InputDecoration(
+                          labelText: 'Phone Number',
+                          hintText: 'e.g. +1 (555) 987-6543',
+                        ),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Please enter a phone number';
+                          }
+                          return null;
+                        },
                       ),
-                      validator: (value) {
-                        if (value == null || value.trim().isEmpty) {
-                          return 'Please enter a phone number';
-                        }
-                        return null;
-                      },
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
               actions: [

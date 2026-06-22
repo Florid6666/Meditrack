@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:audioplayers/audioplayers.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/supabase_service.dart';
+import '../services/alarm_service.dart';
 import '../services/notification_service.dart';
 import 'add_medicine_page.dart';
 import 'medicine_details_page.dart';
@@ -28,10 +29,8 @@ class _HomePageState extends State<HomePage> {
   int _pendingNotificationsCount = 0;
   List<Map<String, dynamic>> _receivedInvites = [];
 
-  // Reminder and alert sound variables
-  final AudioPlayer _audioPlayer = AudioPlayer();
+  // Reminder timer
   Timer? _reminderTimer;
-  final Set<String> _triggeredReminders = {};
 
   String get _todayDateString => "${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}-${DateTime.now().day.toString().padLeft(2, '0')}";
 
@@ -131,6 +130,66 @@ class _HomePageState extends State<HomePage> {
       setState(() {
         _pendingNotificationsCount = currentCount;
       });
+      _triggerMobileNotifications(_receivedInvites, _missedMedications);
+    }
+  }
+
+  Future<void> _triggerMobileNotifications(
+      List<Map<String, dynamic>> invites, List<Map<String, dynamic>> missedMeds) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      
+      final notifiedKeys = prefs.getStringList('notified_keys') ?? [];
+      final newNotifiedKeys = List<String>.from(notifiedKeys);
+      bool hasNew = false;
+      
+      final todayStr = _todayDateString;
+      
+      // 1. Process family invites
+      for (final invite in invites) {
+        final inviteId = invite['id'] as String?;
+        if (inviteId == null) continue;
+        
+        final key = 'invite_$inviteId';
+        if (!notifiedKeys.contains(key)) {
+          newNotifiedKeys.add(key);
+          hasNew = true;
+          
+          final inviterName = invite['inviter_name'] ?? 'Someone';
+          final relation = invite['relation'] ?? 'family';
+          
+          NotificationService.showNotification(
+            title: 'Family Monitoring Request',
+            body: '$inviterName wants to add you as a $relation monitor.',
+          );
+        }
+      }
+      
+      // 2. Process missed medications
+      for (final med in missedMeds) {
+        final medId = med['id'] as String?;
+        if (medId == null) continue;
+        
+        final key = 'missed_${medId}_$todayStr';
+        if (!notifiedKeys.contains(key)) {
+          newNotifiedKeys.add(key);
+          hasNew = true;
+          
+          final medName = med['name'] ?? 'medicine';
+          final time = med['reminder_time'] ?? 'scheduled time';
+          
+          NotificationService.showNotification(
+            title: 'Missed Medication Alert',
+            body: 'You missed your dose of $medName scheduled for $time.',
+          );
+        }
+      }
+      
+      if (hasNew) {
+        await prefs.setStringList('notified_keys', newNotifiedKeys);
+      }
+    } catch (e) {
+      debugPrint('Error triggering mobile notifications: $e');
     }
   }
 
@@ -139,13 +198,13 @@ class _HomePageState extends State<HomePage> {
     super.initState();
     _loadHomeData();
     _startReminderTimer();
-    _requestNotificationPermission();
+    AlarmService.requestPermissions();
+    NotificationService.requestPermission();
   }
 
   @override
   void dispose() {
     _reminderTimer?.cancel();
-    _audioPlayer.dispose();
     super.dispose();
   }
 
@@ -210,6 +269,9 @@ class _HomePageState extends State<HomePage> {
         _receivedInvites = invites;
         _pendingNotificationsCount = invites.length + _missedMedications.length;
       });
+      _triggerMobileNotifications(invites, _missedMedications);
+      // Synchronize native background alarms
+      AlarmService.syncAlarms(meds, logs);
     } catch (e) {
       debugPrint('Error loading home data: $e');
     } finally {
@@ -224,378 +286,8 @@ class _HomePageState extends State<HomePage> {
   void _startReminderTimer() {
     _reminderTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
       if (_medications.isEmpty) return;
-      _checkReminders();
       _updateMissedCount();
     });
-  }
-
-  void _checkReminders() {
-    final now = DateTime.now();
-    final todayStr = "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
-    
-    // Formats for matching the time (handling with and without leading zero for hours)
-    final hourOfPeriod = now.hour > 12 ? now.hour - 12 : (now.hour == 0 ? 12 : now.hour);
-    final periodStr = now.hour >= 12 ? 'PM' : 'AM';
-    final minuteStr = now.minute.toString().padLeft(2, '0');
-    final formattedTime1 = '${hourOfPeriod.toString().padLeft(2, '0')}:$minuteStr $periodStr';
-    final formattedTime2 = '$hourOfPeriod:$minuteStr $periodStr';
-
-    for (final med in _medications) {
-      final medId = med['id'] as String;
-      final reminderTime = med['reminder_time'] as String? ?? '';
-      
-      // Normalize reminder time for comparison
-      final isTimeMatch = reminderTime == formattedTime1 || reminderTime == formattedTime2;
-      
-      if (isTimeMatch) {
-        final uniqueKey = "${todayStr}_$medId";
-        if (_triggeredReminders.contains(uniqueKey)) continue;
-
-        // Check if already taken today
-        final takenToday = _adherenceLogs.any((log) =>
-            log['medication_id'] == medId &&
-            log['date'] == todayStr &&
-            log['taken'] == true);
-
-        if (!takenToday) {
-          _triggeredReminders.add(uniqueKey);
-          _showMedicineReminder(med);
-        }
-      }
-    }
-  }
-
-  Future<void> _playAlertSound() async {
-    try {
-      await _audioPlayer.setReleaseMode(ReleaseMode.loop);
-      await _audioPlayer.play(UrlSource('https://assets.mixkit.co/active_storage/sfx/2869/2869-84.wav'));
-    } catch (e) {
-      debugPrint('Error playing sound: $e');
-    }
-  }
-
-  Future<void> _stopAlertSound() async {
-    try {
-      await _audioPlayer.stop();
-    } catch (e) {
-      debugPrint('Error stopping sound: $e');
-    }
-  }
-
-  Future<void> _requestNotificationPermission() async {
-    final granted = await NotificationService.requestPermission();
-    if (granted) {
-      NotificationService.showNotification(
-        title: 'MediTrack Reminders Active',
-        body: 'We will notify you when it is time to take your medications.',
-      );
-    }
-  }
-
-  void _showMedicineReminder(Map<String, dynamic> med) {
-    _playAlertSound();
-
-    // Trigger system notification panel alert
-    NotificationService.showNotification(
-      title: 'MediTrack Medication Alert!',
-      body: 'Time to take ${med['name'] ?? 'your medicine'} (${med['dosage'] ?? ''}${med['unit'] ?? ''}${med['meal_instruction'] != null ? ' · ${med['meal_instruction']}' : ''})',
-    );
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) {
-        int secondsLeft = 30;
-        Timer? dialogTimer;
-
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            // Start countdown timer inside StatefulBuilder
-            dialogTimer ??= Timer.periodic(const Duration(seconds: 1), (t) {
-              if (secondsLeft > 1) {
-                setDialogState(() {
-                  secondsLeft--;
-                });
-              } else {
-                // Time's up! Stop sound, close dialog
-                dialogTimer?.cancel();
-                _stopAlertSound();
-                Navigator.of(dialogContext).pop();
-              }
-            });
-
-            return PopScope(
-              canPop: false,
-              child: Dialog(
-                backgroundColor: Colors.transparent,
-                insetPadding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Container(
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(32),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFF0F2B48).withAlpha(38),
-                        blurRadius: 30,
-                        offset: const Offset(0, 15),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // Header Section with alert/alarm colors
-                      Container(
-                        padding: const EdgeInsets.symmetric(vertical: 28),
-                        decoration: const BoxDecoration(
-                          gradient: LinearGradient(
-                            colors: [Color(0xFFE57373), Color(0xFFEF5350)],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                          borderRadius: BorderRadius.only(
-                            topLeft: Radius.circular(32),
-                            topRight: Radius.circular(32),
-                          ),
-                        ),
-                        child: Center(
-                          child: Column(
-                            children: [
-                              // Pulsing Alarm Icon
-                              Container(
-                                padding: const EdgeInsets.all(16),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withAlpha(51),
-                                  shape: BoxShape.circle,
-                                ),
-                                child: const Icon(
-                                  Icons.alarm_on_rounded,
-                                  color: Colors.white,
-                                  size: 48,
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              const Text(
-                                'MEDICINE REMINDER',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w900,
-                                  fontSize: 16,
-                                  letterSpacing: 2,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      
-                      // Body with Medicine Consuming Info
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-                        child: Column(
-                          children: [
-                            const Text(
-                              'It is time to consume your medicine:',
-                              style: TextStyle(
-                                color: Color(0xFF8A9AAD),
-                                fontSize: 14,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            // Medicine details card
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(20),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFF8FAFC),
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(color: const Color(0xFFF1F5F9), width: 1.5),
-                              ),
-                              child: Column(
-                                children: [
-                                  Text(
-                                    med['name'] ?? 'Unknown Medicine',
-                                    textAlign: TextAlign.center,
-                                    style: const TextStyle(
-                                      color: Color(0xFF0F2B48),
-                                      fontSize: 22,
-                                      fontWeight: FontWeight.w800,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFFE8F2FF),
-                                          borderRadius: BorderRadius.circular(12),
-                                        ),
-                                        child: Text(
-                                          '${med['type']}',
-                                          style: const TextStyle(
-                                            color: Color(0xFF2B72D0),
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 13,
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFFE6F9F5),
-                                          borderRadius: BorderRadius.circular(12),
-                                        ),
-                                        child: Text(
-                                          '${med['dosage']} ${med['unit']}',
-                                          style: const TextStyle(
-                                            color: Color(0xFF3EC8A8),
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 13,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 14),
-                                  const Divider(height: 1, color: Color(0xFFE2E8F0)),
-                                  const SizedBox(height: 14),
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      const Icon(Icons.access_time_filled_rounded, color: Color(0xFF8A9AAD), size: 18),
-                                      const SizedBox(width: 6),
-                                      Text(
-                                        'Scheduled for: ${med['reminder_time'] ?? '8:00 AM'}',
-                                        style: const TextStyle(
-                                          color: Color(0xFF0F2B48),
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 14,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            ),
-                            
-                            const SizedBox(height: 24),
-                            
-                            // Countdown Indicator
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                SizedBox(
-                                  width: 24,
-                                  height: 24,
-                                  child: CircularProgressIndicator(
-                                    value: secondsLeft / 30,
-                                    strokeWidth: 3,
-                                    valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFE57373)),
-                                    backgroundColor: const Color(0xFFF1F5F9),
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Text(
-                                  'Alert will stop in $secondsLeft seconds',
-                                  style: const TextStyle(
-                                    color: Color(0xFFE57373),
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 14,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            
-                            const SizedBox(height: 24),
-                            
-                            // Action Buttons
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: OutlinedButton(
-                                    onPressed: () {
-                                      dialogTimer?.cancel();
-                                      _stopAlertSound();
-                                      Navigator.of(dialogContext).pop();
-                                    },
-                                    style: OutlinedButton.styleFrom(
-                                      side: const BorderSide(color: Color(0xFFCBD5E1), width: 1.5),
-                                      padding: const EdgeInsets.symmetric(vertical: 16),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(16),
-                                      ),
-                                    ),
-                                    child: const Text(
-                                      'Dismiss',
-                                      style: TextStyle(
-                                        color: Color(0xFF64748B),
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 15,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: ElevatedButton(
-                                    onPressed: () async {
-                                      dialogTimer?.cancel();
-                                      _stopAlertSound();
-                                      Navigator.of(dialogContext).pop();
-                                      
-                                      // Log the medication as taken
-                                      try {
-                                        await SupabaseService.logAdherence(
-                                          medicationId: med['id'],
-                                          date: DateTime.now(),
-                                          taken: true,
-                                        );
-                                        _loadHomeData();
-                                      } catch (e) {
-                                        if (context.mounted) {
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            SnackBar(content: Text('Error logging dose: $e')),
-                                          );
-                                        }
-                                      }
-                                    },
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: const Color(0xFF3EC8A8),
-                                      foregroundColor: Colors.white,
-                                      elevation: 0,
-                                      padding: const EdgeInsets.symmetric(vertical: 16),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(16),
-                                      ),
-                                    ),
-                                    child: const Text(
-                                      'Done',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 15,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
   }
 
   Widget _buildBody() {
@@ -795,7 +487,7 @@ class _HomePageState extends State<HomePage> {
                                                     );
                                                     _loadHomeData();
                                                   } catch (e) {
-                                                    if (mounted) {
+                                                    if (context.mounted) {
                                                       ScaffoldMessenger.of(context).showSnackBar(
                                                         SnackBar(content: Text('Error logging dose: $e')),
                                                       );
@@ -1843,217 +1535,6 @@ class _HomePageState extends State<HomePage> {
                 ],
               ),
       ),
-    );
-  }
-
-  void _showNotificationsBottomSheet() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setSheetState) {
-            return Container(
-              height: MediaQuery.of(context).size.height * 0.75,
-              decoration: const BoxDecoration(
-                color: Color(0xFFF5F9FD),
-                borderRadius: BorderRadius.only(
-                  topLeft: Radius.circular(30),
-                  topRight: Radius.circular(30),
-                ),
-              ),
-              child: Column(
-                children: [
-                  // Grabber
-                  Container(
-                    margin: const EdgeInsets.only(top: 12, bottom: 8),
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF8A9AAD).withAlpha(76),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  // Header
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          'Notifications',
-                          style: TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.w800,
-                            color: Color(0xFF0F2B48),
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.close_rounded, color: Color(0xFF8A9AAD)),
-                          onPressed: () => Navigator.of(context).pop(),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Divider(height: 1, color: Color(0xFFE2E8F0)),
-                  Expanded(
-                    child: _receivedInvites.isEmpty
-                        ? _buildNotificationEmptyState()
-                        : ListView.separated(
-                            padding: const EdgeInsets.all(24),
-                            itemCount: _receivedInvites.length,
-                            separatorBuilder: (context, index) => const SizedBox(height: 14),
-                            itemBuilder: (context, index) {
-                              final invite = _receivedInvites[index];
-                              final reqId = invite['id'] as String;
-                              final rawRelation = invite['relation'] ?? 'Family';
-                              final relation = rawRelation.contains('|') ? rawRelation.split('|')[0] : rawRelation;
-                              final profile = invite['profiles'] as Map<String, dynamic>?;
-                              final senderName = (profile?['full_name'] != null && (profile?['full_name'] as String).trim().isNotEmpty)
-                                  ? profile!['full_name']
-                                  : (profile?['email'] ?? 'Unknown Sender');
-                              
-                              bool isResponding = false;
-
-                              return StatefulBuilder(
-                                builder: (context, setCardState) {
-                                  return Container(
-                                    padding: const EdgeInsets.all(16),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius: BorderRadius.circular(20),
-                                      boxShadow: const [
-                                        BoxShadow(
-                                          color: Color(0x04000000),
-                                          blurRadius: 10,
-                                          offset: Offset(0, 4),
-                                        ),
-                                      ],
-                                    ),
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          children: [
-                                            Container(
-                                              padding: const EdgeInsets.all(10),
-                                              decoration: BoxDecoration(
-                                                color: const Color(0xFFFFF8EE),
-                                                shape: BoxShape.circle,
-                                                border: Border.all(color: const Color(0xFFFEDBA8), width: 1),
-                                              ),
-                                              child: const Icon(
-                                                Icons.favorite_rounded,
-                                                color: Color(0xFFD97706),
-                                                size: 20,
-                                              ),
-                                            ),
-                                            const SizedBox(width: 12),
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment: CrossAxisAlignment.start,
-                                                children: [
-                                                  Text(
-                                                    senderName,
-                                                    style: const TextStyle(
-                                                      fontWeight: FontWeight.bold,
-                                                      fontSize: 15,
-                                                      color: Color(0xFF0F2B48),
-                                                    ),
-                                                  ),
-                                                  const SizedBox(height: 2),
-                                                  Text(
-                                                    'Wants to monitor you as: $relation',
-                                                    style: const TextStyle(
-                                                      fontSize: 13,
-                                                      color: Color(0xFF8A9AAD),
-                                                      fontWeight: FontWeight.w500,
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 16),
-                                        Row(
-                                          mainAxisAlignment: MainAxisAlignment.end,
-                                          children: [
-                                            TextButton(
-                                              onPressed: isResponding
-                                                  ? null
-                                                  : () async {
-                                                      setCardState(() {
-                                                        isResponding = true;
-                                                      });
-                                                      await _respondToInviteFromNotifications(reqId, false);
-                                                      setSheetState(() {
-                                                        _receivedInvites.removeAt(index);
-                                                      });
-                                                    },
-                                              child: const Text(
-                                                'Decline',
-                                                style: TextStyle(
-                                                  color: Color(0xFFE57373),
-                                                  fontWeight: FontWeight.bold,
-                                                ),
-                                              ),
-                                            ),
-                                            const SizedBox(width: 12),
-                                            ElevatedButton(
-                                              onPressed: isResponding
-                                                  ? null
-                                                  : () async {
-                                                      setCardState(() {
-                                                        isResponding = true;
-                                                      });
-                                                      await _respondToInviteFromNotifications(reqId, true);
-                                                      setSheetState(() {
-                                                        _receivedInvites.removeAt(index);
-                                                      });
-                                                    },
-                                              style: ElevatedButton.styleFrom(
-                                                backgroundColor: const Color(0xFF3EC8A8),
-                                                foregroundColor: Colors.white,
-                                                elevation: 0,
-                                                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                                                shape: RoundedRectangleBorder(
-                                                  borderRadius: BorderRadius.circular(12),
-                                                ),
-                                              ),
-                                              child: isResponding
-                                                  ? const SizedBox(
-                                                      width: 16,
-                                                      height: 16,
-                                                      child: CircularProgressIndicator(
-                                                        strokeWidth: 2,
-                                                        color: Colors.white,
-                                                      ),
-                                                    )
-                                                  : const Text(
-                                                      'Accept',
-                                                      style: TextStyle(
-                                                        fontWeight: FontWeight.bold,
-                                                      ),
-                                                    ),
-                                            ),
-                                          ],
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                },
-                              );
-                            },
-                          ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
     );
   }
 

@@ -1,14 +1,21 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:alarm/alarm.dart';
 import 'constants/supabase_config.dart';
 import 'pages/onboarding_page.dart';
 import 'pages/home_page.dart';
 import 'pages/forgot_password_page.dart';
+import 'pages/ringing_page.dart';
+import 'services/alarm_service.dart';
+
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
+  await AlarmService.init();
+
   try {
     await Supabase.initialize(
       url: SupabaseConfig.url,
@@ -21,12 +28,42 @@ void main() async {
   runApp(const MyApp());
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  StreamSubscription<AlarmSettings>? _ringSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+    _ringSubscription = Alarm.ringStream.stream.listen((alarmSettings) {
+      _navigateToRingingPage(alarmSettings);
+    });
+  }
+
+  @override
+  void dispose() {
+    _ringSubscription?.cancel();
+    super.dispose();
+  }
+
+  void _navigateToRingingPage(AlarmSettings settings) {
+    navigatorKey.currentState?.push(
+      MaterialPageRoute(
+        builder: (context) => RingingPage(alarmSettings: settings),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: navigatorKey,
       title: 'MediTrack',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(

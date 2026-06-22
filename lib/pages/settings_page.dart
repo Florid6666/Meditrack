@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'edit_profile_page.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -14,6 +15,24 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _soundAlerts = true;
   bool _lowStockAlerts = true;
   bool _largeTextMode = false;
+  double _alertVolume = 0.8;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      setState(() {
+        _alertVolume = prefs.getDouble('alarm_volume') ?? 0.8;
+      });
+    } catch (e) {
+      debugPrint('Error loading settings: $e');
+    }
+  }
 
   // Font size scaler helper to avoid deprecation warnings while providing instant feedback
   double _scale(double size) {
@@ -93,6 +112,28 @@ class _SettingsPageState extends State<SettingsPage> {
                     });
                   },
                 ),
+                if (_soundAlerts) ...[
+                  const Divider(height: 1, thickness: 1, color: Color(0xFFF1F5F9)),
+                  _buildVolumeSliderRow(
+                    icon: _alertVolume == 0.0
+                        ? Icons.volume_mute_rounded
+                        : _alertVolume < 0.4
+                            ? Icons.volume_down_rounded
+                            : Icons.volume_up_rounded,
+                    iconColor: const Color(0xFFE57373),
+                    iconBgColor: const Color(0xFFE57373).withAlpha(26),
+                    title: 'Alert Volume',
+                    subtitle: '${(_alertVolume * 100).round()}%',
+                    value: _alertVolume,
+                    onChanged: (val) async {
+                      setState(() {
+                        _alertVolume = val;
+                      });
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.setDouble('alarm_volume', val);
+                    },
+                  ),
+                ],
               ]),
               _buildSectionTitle('Stock Alerts'),
               _buildSectionCard([
@@ -285,6 +326,87 @@ class _SettingsPageState extends State<SettingsPage> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildVolumeSliderRow({
+    required IconData icon,
+    required Color iconColor,
+    required Color iconBgColor,
+    required String title,
+    required String subtitle,
+    required double value,
+    required ValueChanged<double> onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: iconBgColor,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, color: iconColor, size: _scale(22)),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: _scale(16),
+                        fontWeight: FontWeight.bold,
+                        color: const Color(0xFF0F2B48),
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      'Alarm tone volume level',
+                      style: TextStyle(
+                        fontSize: _scale(12),
+                        color: const Color(0xFF8A9AAD),
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                subtitle,
+                style: TextStyle(
+                  fontSize: _scale(15),
+                  fontWeight: FontWeight.w800,
+                  color: const Color(0xFF2B72D0),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              activeTrackColor: const Color(0xFF2B72D0),
+              inactiveTrackColor: const Color(0xFFE2E8F0),
+              thumbColor: Colors.white,
+              overlayColor: const Color(0xFF2B72D0).withAlpha(32),
+              trackHeight: 6,
+            ),
+            child: Slider(
+              value: value,
+              min: 0.0,
+              max: 1.0,
+              onChanged: onChanged,
+            ),
+          ),
+        ],
       ),
     );
   }
